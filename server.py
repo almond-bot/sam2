@@ -1,5 +1,6 @@
 import asyncio
 from fastapi import FastAPI, File, UploadFile, Form
+from fastapi.responses import Response
 import uvicorn
 import torch
 import numpy as np
@@ -78,7 +79,7 @@ async def root(
     # Run inference
     bboxes = grounding_dino_inference(rgb, item)
     if len(bboxes) == 0:
-        return {"masks": []}
+        return Response(content=b"", media_type="application/octet-stream")
 
     # Use first bbox and shrink by 5%
     x1, y1, x2, y2 = bboxes[0]
@@ -92,7 +93,7 @@ async def root(
 
     valid_depth_mask = ~np.isnan(depth_crop)
     if not np.any(valid_depth_mask):
-        return {"mask": None}
+        return Response(content=b"", media_type="application/octet-stream")
 
     mask_crops = sam2_inference(rgb_crop)
     mask_crops = [m["segmentation"] for m in mask_crops]
@@ -107,12 +108,12 @@ async def root(
             min_depth, mask_crop = d_min, m
 
     if mask_crop is None:
-        return {"mask": None}
+        return Response(content=b"", media_type="application/octet-stream")
 
     mask = np.zeros(rgb.shape[:2], dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
 
-    return {"mask": mask.tolist()}
+    return Response(content=mask.tobytes(), media_type="application/octet-stream")
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)
