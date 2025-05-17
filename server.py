@@ -1,15 +1,24 @@
-from fastapi import FastAPI, File, UploadFile
+import asyncio
+from fastapi import FastAPI, File, UploadFile, Form
 import uvicorn
 import torch
 import numpy as np
 from PIL import Image
 import io
+from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 app = FastAPI()
+
+grounding_dino_processor = AutoProcessor.from_pretrained(
+    "IDEA-Research/grounding-dino-tiny"
+)
+grounding_dino = AutoModelForZeroShotObjectDetection.from_pretrained(
+    "IDEA-Research/grounding-dino-tiny"
+).to("cuda")
 
 sam2 = build_sam2(
     "configs/sam2.1/sam2.1_hiera_l.yaml",
@@ -18,6 +27,26 @@ sam2 = build_sam2(
     apply_postprocessing=False,
 )
 sam2_mask_generator = SAM2AutomaticMaskGenerator(sam2)
+
+def grounding_dino_inference(img: np.ndarray, item: str) -> np.ndarray:
+    img = Image.fromarray(img)
+    text_labels = [[item]]
+
+    inputs = grounding_dino_processor(
+        images=img, text=text_labels, return_tensors="pt"
+    ).to("cuda")
+    with torch.no_grad():
+        outputs = grounding_dino(**inputs)
+
+    results = grounding_dino_processor.post_process_grounded_object_detection(
+        outputs,
+        inputs.input_ids,
+        box_threshold=0.4,
+        text_threshold=0.3,
+        target_sizes=[img.size[::-1]],
+    )
+
+    return results[0]["boxes"].cpu().numpy()
 
 def sam2_inference(
     img: np.ndarray,
@@ -28,16 +57,50 @@ def sam2_inference(
     return masks
 
 @app.post("/")
-async def root(file: UploadFile = File(...)):
+async def root(item: str, rgb_file: UploadFile = File(...), depth_file: UploadFile = File(...)):
     # Read and convert the uploaded image
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents))
-    img_array = np.array(image)
-    
+    img_contents, depth_contents = await asyncio.gather(rgb_file.read(), depth_file.read())
+    rgb = np.array(Image.open(io.BytesIO(img_contents)))
+    depth = np.array(Image.open(io.BytesIO(depth_contents)))
+
     # Run inference
-    masks = sam2_inference(img_array)
-    
-    return {"masks": [mask["segmentation"].tolist() for mask in masks]}
+    bboxes = grounding_dino_inference(rgb, item)
+    if len(bboxes) == 0:
+        return {"masks": []}
+
+    # Use first bbox and shrink by 5%
+    x1, y1, x2, y2 = bboxes[0]
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    w, h = 0.95 * (x2 - x1), 0.95 * (y2 - y1)
+    x1, y1 = int(cx - w / 2), int(cy - h / 2)
+    x2, y2 = int(cx + w / 2), int(cy + h / 2)
+
+    rgb_crop = rgb[y1:y2, x1:x2]
+    depth_crop = depth[y1:y2, x1:x2]
+
+    valid_depth_mask = ~np.isnan(depth_crop)
+    if not np.any(valid_depth_mask):
+        return {"mask": None}
+
+    mask_crops = sam2_inference(rgb_crop)
+    mask_crops = [m["segmentation"] for m in mask_crops]
+
+    min_depth = np.inf
+    mask_crop = None
+    for m in mask_crops:
+        d = depth_crop.copy()
+        d[~m] = np.nan
+        d_min = np.nanmin(d)
+        if d_min < min_depth:
+            min_depth, mask_crop = d_min, m
+
+    if mask_crop is None:
+        return {"mask": None}
+
+    mask = np.zeros(rgb.shape[:2], dtype=bool)
+    mask[y1:y2, x1:x2] = mask_crop
+
+    return {"mask": mask}
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)

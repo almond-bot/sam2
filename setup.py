@@ -31,6 +31,7 @@ REQUIRED_PACKAGES = [
     "pillow>=9.4.0",
     "fastapi>=0.115.12",
     "uvicorn>=0.34.0",
+    "transformers>=4.51.3",
 ]
 
 EXTRA_PACKAGES = {
