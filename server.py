@@ -14,7 +14,7 @@ app = FastAPI()
 sam2 = build_sam2(
     "configs/sam2.1/sam2.1_hiera_l.yaml",
     "/home/almond/meta/sam2/checkpoints/sam2.1_hiera_large.pt",
-    device=torch.device(DEVICE),
+    device=torch.device("cuda"),
     apply_postprocessing=False,
 )
 sam2_mask_generator = SAM2AutomaticMaskGenerator(sam2)
