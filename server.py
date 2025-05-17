@@ -57,6 +57,10 @@ def sam2_inference(
 
     return masks
 
+def warmup_models():
+    grounding_dino_inference(np.zeros((1080, 1920, 3), dtype=np.uint8), "warmup")
+    sam2_inference(np.zeros((1080, 1920, 3), dtype=np.uint8))
+
 @app.post("/")
 async def root(
     rgb_file: UploadFile = File(...),
@@ -116,6 +120,7 @@ async def root(
     return Response(content=mask.tobytes(), media_type="application/octet-stream")
 
 def main():
+    warmup_models()
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
