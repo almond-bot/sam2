@@ -57,11 +57,23 @@ def sam2_inference(
     return masks
 
 @app.post("/")
-async def root(item: str, rgb_file: UploadFile = File(...), depth_file: UploadFile = File(...)):
-    # Read and convert the uploaded image
-    img_contents, depth_contents = await asyncio.gather(rgb_file.read(), depth_file.read())
-    rgb = np.array(Image.open(io.BytesIO(img_contents)))
-    depth = np.array(Image.open(io.BytesIO(depth_contents)))
+async def root(
+    rgb_file: UploadFile = File(...),
+    depth_file: UploadFile = File(...),
+    rgb_shape: str = Form(...),
+    depth_shape: str = Form(...),
+    item: str = Form(...),
+):
+    # Read the raw bytes
+    rgb_contents, depth_contents = await asyncio.gather(rgb_file.read(), depth_file.read())
+    
+    # Parse shapes
+    rgb_shape = tuple(map(int, rgb_shape.split(",")))
+    depth_shape = tuple(map(int, depth_shape.split(",")))
+    
+    # Convert bytes to numpy arrays
+    rgb = np.frombuffer(rgb_contents, dtype=np.uint8).reshape(rgb_shape)
+    depth = np.frombuffer(depth_contents, dtype=np.float32).reshape(depth_shape)
 
     # Run inference
     bboxes = grounding_dino_inference(rgb, item)
@@ -100,7 +112,7 @@ async def root(item: str, rgb_file: UploadFile = File(...), depth_file: UploadFi
     mask = np.zeros(rgb.shape[:2], dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
 
-    return {"mask": mask}
+    return {"mask": mask.tolist()}
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)
