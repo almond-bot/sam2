@@ -37,7 +37,7 @@ async def root(file: UploadFile = File(...)):
     # Run inference
     masks = sam2_inference(img_array)
     
-    return {"masks": masks.tolist()}
+    return {"masks": [mask["segmentation"].tolist() for mask in masks]}
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=8000)
