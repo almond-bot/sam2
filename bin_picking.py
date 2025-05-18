@@ -1,12 +1,13 @@
-from fastapi import FastAPI, Request
+import asyncio
+from fastapi import FastAPI, File, Form, UploadFile
 import json
 import uvicorn
 import torch
 import numpy as np
 from PIL import Image
+import cv2
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 import lz4.frame
-import struct
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2
@@ -141,19 +142,24 @@ def get_item_offset(
 
 @app.post("/")
 async def root(
-    request: Request
+    rgb: UploadFile = File(...),
+    depth: UploadFile = File(...),
+    rgb_shape: str = Form(...),
+    depth_shape: str = Form(...),
+    item: str = Form(...),
+    cam_params: str = Form(...),
 ):
-    compressed = await request.body()
-    cam_params = json.loads(request.headers["Cam-Params"])
-    item = request.headers["Item"]
+    h, w = map(int, rgb_shape.split(","))
+    dh, dw = map(int, depth_shape.split(","))
 
-    payload = lz4.frame.decompress(compressed)
-    h, w, c, dh, dw, _ = struct.unpack("IIIIII", payload[:24])
+    rgb_buf, d_lz4 = await asyncio.gather(rgb.read(), depth.read())
 
-    offset = 24
-    rgb   = np.frombuffer(payload[offset:offset + h * w * c], dtype=np.uint8).reshape((h,  w,  c))
-    offset += h * w * c
-    depth = np.frombuffer(payload[offset:], dtype=np.float32).reshape((dh, dw))
+    rgb = cv2.imdecode(np.frombuffer(rgb_buf, np.uint8), cv2.IMREAD_COLOR).reshape((h, w, 3))
+
+    depth_u16 = np.frombuffer(lz4.frame.decompress(d_lz4), np.uint16).reshape((dh, dw))
+    depth = depth_u16.astype(np.float32) / 100.0
+
+    cam_params = json.loads(cam_params)
 
     # Run inference
     bboxes = grounding_dino_inference(rgb, item)
