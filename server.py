@@ -6,7 +6,6 @@ import torch
 import numpy as np
 from PIL import Image
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
-import cv2
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2
