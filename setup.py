@@ -32,6 +32,7 @@ REQUIRED_PACKAGES = [
     "fastapi>=0.115.12",
     "uvicorn>=0.34.0",
     "transformers>=4.51.3",
+    "lz4>=4.4.4"
 ]
 
 EXTRA_PACKAGES = {

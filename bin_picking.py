@@ -1,11 +1,12 @@
-import asyncio
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, Request
 import json
 import uvicorn
 import torch
 import numpy as np
 from PIL import Image
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+import lz4.frame
+import struct
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2
@@ -140,23 +141,19 @@ def get_item_offset(
 
 @app.post("/")
 async def root(
-    rgb_file: UploadFile = File(...),
-    depth_file: UploadFile = File(...),
-    rgb_shape: str = Form(...),
-    depth_shape: str = Form(...),
-    item: str = Form(...),
-    cam_params: str = Form(...),
+    request: Request
 ):
-    # Read the raw bytes
-    rgb_contents, depth_contents = await asyncio.gather(rgb_file.read(), depth_file.read())
-    
-    # Parse shapes
-    rgb_shape = tuple(map(int, rgb_shape.split(",")))
-    depth_shape = tuple(map(int, depth_shape.split(",")))
+    compressed = await request.body()
+    cam_params = json.loads(request.headers["Cam-Params"])
+    item = request.headers["Item"]
 
-    # Convert bytes to numpy arrays
-    rgb = np.frombuffer(rgb_contents, dtype=np.uint8).reshape(rgb_shape)
-    depth = np.frombuffer(depth_contents, dtype=np.float32).reshape(depth_shape)
+    payload = lz4.frame.decompress(compressed)
+    h, w, c, dh, dw, _ = struct.unpack("IIIIII", payload[:24])
+
+    offset = 24
+    rgb   = np.frombuffer(payload[offset:offset + h * w * c], dtype=np.uint8).reshape((h,  w,  c))
+    offset += h * w * c
+    depth = np.frombuffer(payload[offset:], dtype=np.float32).reshape((dh, dw))
 
     # Run inference
     bboxes = grounding_dino_inference(rgb, item)
@@ -195,7 +192,6 @@ async def root(
     mask = np.zeros(depth.shape, dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
 
-    cam_params = json.loads(cam_params)
     item_offset = get_item_offset(cam_params, depth, mask)
 
     return item_offset
