@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import Response
+import json
 import uvicorn
 import torch
 import numpy as np
@@ -59,6 +59,85 @@ def warmup_models():
     grounding_dino_inference(np.zeros((1080, 1920, 3), dtype=np.uint8), "warmup")
     sam2_inference(np.zeros((1080, 1920, 3), dtype=np.uint8))
 
+
+def _wrap_to_90(angle_deg: float) -> float:
+    """Wrap angle to the range [-90, 90] degrees."""
+    angle_deg = ((angle_deg + 180) % 360) - 180  # -> [-180, 180]
+    if angle_deg > 90:
+        angle_deg -= 180
+    elif angle_deg < -90:
+        angle_deg += 180
+    return angle_deg
+
+
+def get_item_offset(
+    cam_p: dict, depth: np.ndarray, mask: np.ndarray
+) -> dict:
+    # Apply mask to depth to get only the depth values of the object
+    masked_depth = depth.copy()
+    masked_depth[~mask] = np.nan
+
+    # Get 3D points for the segmented object
+    valid_points = np.where(~np.isnan(masked_depth))
+    y_coords, x_coords = valid_points
+    z_coords = masked_depth[valid_points]
+
+    # Calculate center point of the mask
+    center_x_loc = float(np.mean(x_coords))
+    center_y_loc = float(np.mean(y_coords))
+
+    # Snap center to the nearest actual pixel to make PCA deterministic
+    distances = np.sqrt((x_coords - center_x_loc) ** 2 + (y_coords - center_y_loc) ** 2)
+    closest_idx = np.argmin(distances)
+    center_y_loc = y_coords[closest_idx]
+    center_x_loc = x_coords[closest_idx]
+
+    center_z = masked_depth[center_y_loc, center_x_loc]
+    center_x = ((center_x_loc - cam_p["cx"]) * center_z) / cam_p["fx"]
+    center_y = ((center_y_loc - cam_p["cy"]) * center_z) / cam_p["fy"]
+
+    x_coords = ((x_coords - cam_p["cx"]) * z_coords) / cam_p["fx"]
+    y_coords = ((y_coords - cam_p["cy"]) * z_coords) / cam_p["fy"]
+
+    # Stack coordinates into a point cloud for PCA
+    points = np.column_stack((x_coords, y_coords, z_coords))
+
+    # Center the points for PCA
+    centered_points = points - np.mean(points, axis=0)
+
+    # Perform PCA to get principal axes
+    covariance_matrix = np.cov(centered_points.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+
+    # Order eigenvectors by descending eigenvalues
+    idx = eigenvalues.argsort()[::-1]
+    eigenvectors = eigenvectors[:, idx]
+
+    # Enforce a deterministic sign so yaw stays within ±90°
+    if eigenvectors[0, 0] < 0:
+        eigenvectors *= -1
+
+    # Rotation angles (radians)
+    roll = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
+    pitch = np.arctan2(
+        -eigenvectors[0, 2], np.sqrt(eigenvectors[1, 2] ** 2 + eigenvectors[2, 2] ** 2)
+    )
+    yaw = np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0])
+
+    # Convert to degrees and wrap to [-90, 90]
+    roll_deg = _wrap_to_90(np.degrees(roll))
+    pitch_deg = _wrap_to_90(np.degrees(pitch))
+    yaw_deg = _wrap_to_90(np.degrees(yaw))
+
+    return {
+        "x": float(center_x),
+        "y": float(center_y),
+        "z": float(center_z),
+        "roll": float(roll_deg),
+        "pitch": float(pitch_deg),
+        "yaw": float(yaw_deg)
+    }
+
 @app.post("/")
 async def root(
     rgb_file: UploadFile = File(...),
@@ -66,6 +145,7 @@ async def root(
     rgb_shape: str = Form(...),
     depth_shape: str = Form(...),
     item: str = Form(...),
+    cam_params: str = Form(...),
 ):
     # Read the raw bytes
     rgb_contents, depth_contents = await asyncio.gather(rgb_file.read(), depth_file.read())
@@ -115,7 +195,10 @@ async def root(
     mask = np.zeros(depth.shape, dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
 
-    return Response(content=mask.tobytes(), media_type="application/octet-stream")
+    cam_params = json.loads(cam_params)
+    item_offset = get_item_offset(cam_params, depth, mask)
+
+    return item_offset
 
 def main():
     warmup_models()
