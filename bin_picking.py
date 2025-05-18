@@ -85,14 +85,8 @@ def get_item_offset(
     z_coords = masked_depth[valid_points]
 
     # Calculate center point of the mask
-    center_x_loc = float(np.mean(x_coords))
-    center_y_loc = float(np.mean(y_coords))
-
-    # Snap center to the nearest actual pixel to make PCA deterministic
-    distances = np.sqrt((x_coords - center_x_loc) ** 2 + (y_coords - center_y_loc) ** 2)
-    closest_idx = np.argmin(distances)
-    center_y_loc = y_coords[closest_idx]
-    center_x_loc = x_coords[closest_idx]
+    center_x_loc = int(np.mean(x_coords))
+    center_y_loc = int(np.mean(y_coords))
 
     center_z = masked_depth[center_y_loc, center_x_loc]
     center_x = ((center_x_loc - cam_p["cx"]) * center_z) / cam_p["fx"]
