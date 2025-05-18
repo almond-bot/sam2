@@ -5,12 +5,11 @@ import uvicorn
 import torch
 import numpy as np
 from PIL import Image
-import io
 from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+import cv2
 
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 app = FastAPI()
 
@@ -75,7 +74,7 @@ async def root(
     # Parse shapes
     rgb_shape = tuple(map(int, rgb_shape.split(",")))
     depth_shape = tuple(map(int, depth_shape.split(",")))
-    
+
     # Convert bytes to numpy arrays
     rgb = np.frombuffer(rgb_contents, dtype=np.uint8).reshape(rgb_shape)
     depth = np.frombuffer(depth_contents, dtype=np.float32).reshape(depth_shape)
@@ -83,7 +82,7 @@ async def root(
     # Run inference
     bboxes = grounding_dino_inference(rgb, item)
     if len(bboxes) == 0:
-        return Response(content=b"", media_type="application/octet-stream")
+        return
 
     # Use first bbox and shrink by 5%
     x1, y1, x2, y2 = bboxes[0]
@@ -97,7 +96,7 @@ async def root(
 
     valid_depth_mask = ~np.isnan(depth_crop)
     if not np.any(valid_depth_mask):
-        return Response(content=b"", media_type="application/octet-stream")
+        return
 
     mask_crops = sam2_inference(rgb_crop)
     mask_crops = [m["segmentation"] for m in mask_crops]
@@ -112,9 +111,9 @@ async def root(
             min_depth, mask_crop = d_min, m
 
     if mask_crop is None:
-        return Response(content=b"", media_type="application/octet-stream")
+        return
 
-    mask = np.zeros(rgb.shape[:2], dtype=bool)
+    mask = np.zeros(depth.shape, dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
 
     return Response(content=mask.tobytes(), media_type="application/octet-stream")
