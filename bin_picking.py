@@ -15,10 +15,10 @@ from sam2.build_sam import build_sam2
 app = FastAPI()
 
 grounding_dino_processor = AutoProcessor.from_pretrained(
-    "IDEA-Research/grounding-dino-tiny"
+    "IDEA-Research/grounding-dino-base"
 )
 grounding_dino = AutoModelForZeroShotObjectDetection.from_pretrained(
-    "IDEA-Research/grounding-dino-tiny"
+    "IDEA-Research/grounding-dino-base"
 ).to("cuda")
 
 sam2 = build_sam2(
@@ -45,8 +45,8 @@ def grounding_dino_inference(img: np.ndarray, item: str) -> np.ndarray:
     results = grounding_dino_processor.post_process_grounded_object_detection(
         outputs,
         inputs.input_ids,
-        box_threshold=0.4,
-        text_threshold=0.3,
+        box_threshold=0.2,
+        text_threshold=0.15,
         target_sizes=[img.size[::-1]],
     )
 
@@ -184,14 +184,60 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
         np.any(m[:, 0]) or np.any(m[:, -1])
     )]
 
-    min_depth = np.inf
+    # Remove masks that are fully enclosed in another mask and are less than 10% of parent mask area
+    filtered_masks = []
+    for i, mask1 in enumerate(mask_crops):
+        is_enclosed = False
+        for j, mask2 in enumerate(mask_crops):
+            if i != j and np.all(np.logical_or(~mask1, mask2)):
+                # Calculate areas
+                area1 = np.sum(mask1)
+                area2 = np.sum(mask2)
+                # Only remove if enclosed mask is less than 10% of parent mask
+                if area1 < 0.1 * area2:
+                    is_enclosed = True
+                    break
+        if not is_enclosed:
+            filtered_masks.append(mask1)
+    mask_crops = filtered_masks
+
+    best_score = -np.inf
     mask_crop = None
+
     for m in mask_crops:
-        d = depth_crop.copy()
-        d[~m] = np.nan
-        d_min = np.nanmin(d)
-        if d_min < min_depth:
-            min_depth, mask_crop = d_min, m
+        d_obj = depth_crop.copy()
+        d_obj[~m] = np.nan
+
+        obj_depth = d_obj[m]
+        if len(obj_depth) == 0:
+            continue
+
+        obj_median = np.nanmedian(obj_depth)
+        obj_percentile10 = np.nanpercentile(obj_depth, 10)
+
+        # Use a separate depth copy for background
+        d_bg = depth_crop.copy()
+
+        # Erode the object mask to shrink it slightly
+        kernel = np.ones((5, 5), np.uint8)
+        mask_eroded = cv2.erode(m.astype(np.uint8), kernel, iterations=1).astype(bool)
+
+        bg_mask = ~m
+        bg_mask[mask_eroded] = False
+
+        bg_depth = d_bg[bg_mask]
+        bg_depth = bg_depth[~np.isnan(bg_depth)]
+        if len(bg_depth) == 0:
+            bg_median = np.nanmedian(depth_crop[~np.isnan(depth_crop)])
+        else:
+            bg_median = np.median(bg_depth)
+
+        height_above_bg = bg_median - obj_median
+        score = (0.6 * height_above_bg) - (0.4 * obj_percentile10)
+
+        if score > best_score:
+            best_score = score
+            mask_crop = m
 
     if mask_crop is None:
         return
