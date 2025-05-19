@@ -76,7 +76,7 @@ def _wrap_to_90(angle_deg: float) -> float:
 
 
 def get_item_offset(
-    cam_p: dict, depth: np.ndarray, mask: np.ndarray
+    cam_params: dict, depth: np.ndarray, mask: np.ndarray
 ) -> dict:
     # Apply mask to depth to get only the depth values of the object
     masked_depth = depth.copy()
@@ -92,11 +92,11 @@ def get_item_offset(
     center_y_loc = int(np.mean(y_coords))
 
     center_z = masked_depth[center_y_loc, center_x_loc]
-    center_x = ((center_x_loc - cam_p["cx"]) * center_z) / cam_p["fx"]
-    center_y = ((center_y_loc - cam_p["cy"]) * center_z) / cam_p["fy"]
+    center_x = ((center_x_loc - cam_params["cx"]) * center_z) / cam_params["fx"]
+    center_y = ((center_y_loc - cam_params["cy"]) * center_z) / cam_params["fy"]
 
-    x_coords = ((x_coords - cam_p["cx"]) * z_coords) / cam_p["fx"]
-    y_coords = ((y_coords - cam_p["cy"]) * z_coords) / cam_p["fy"]
+    x_coords = ((x_coords - cam_params["cx"]) * z_coords) / cam_params["fx"]
+    y_coords = ((y_coords - cam_params["cy"]) * z_coords) / cam_params["fy"]
 
     # Stack coordinates into a point cloud for PCA
     points = np.column_stack((x_coords, y_coords, z_coords))
@@ -116,17 +116,19 @@ def get_item_offset(
     if np.linalg.det(eigenvectors) < 0:
         eigenvectors[:, 2] *= -1
 
+    # Ensure Z-axis points up (positive Z in camera frame)
+    if eigenvectors[2, 2] < 0:
+        eigenvectors *= -1
+
     # Rotation angles (radians)
     roll = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
     pitch = np.arctan2(
         -eigenvectors[0, 2], np.sqrt(eigenvectors[1, 2] ** 2 + eigenvectors[2, 2] ** 2)
     )
-    yaw = np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0])
 
     # Convert to degrees and wrap to [-90, 90]
     roll_deg = _wrap_to_90(np.degrees(roll))
     pitch_deg = _wrap_to_90(np.degrees(pitch))
-    yaw_deg = _wrap_to_90(np.degrees(yaw))
 
     return {
         "x": float(center_x),
@@ -134,7 +136,7 @@ def get_item_offset(
         "z": float(center_z),
         "roll": float(roll_deg),
         "pitch": float(pitch_deg),
-        "yaw": float(yaw_deg)
+        "yaw": 0
     }
 
 def save_mask_overlays(rgb: np.ndarray, masks: list[np.ndarray]):
