@@ -27,7 +27,10 @@ sam2 = build_sam2(
     device=torch.device("cuda"),
     apply_postprocessing=False,
 )
-sam2_mask_generator = SAM2AutomaticMaskGenerator(sam2)
+sam2_mask_generator = SAM2AutomaticMaskGenerator(
+    sam2,
+    stability_score_thresh=0.8,
+)
 
 def grounding_dino_inference(img: np.ndarray, item: str) -> np.ndarray:
     img = Image.fromarray(img)
@@ -157,10 +160,9 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
     if len(bboxes) == 0:
         return
 
-    # Use first bbox and shrink by 5%
     x1, y1, x2, y2 = bboxes[0]
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-    w, h = 0.95 * (x2 - x1), 0.95 * (y2 - y1)
+    w, h = x2 - x1, y2 - y1
     x1, y1 = int(cx - w / 2), int(cy - h / 2)
     x2, y2 = int(cx + w / 2), int(cy + h / 2)
 
@@ -173,6 +175,12 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
 
     mask_crops = sam2_inference(rgb_crop)
     mask_crops = [m["segmentation"] for m in mask_crops]
+
+    # Remove masks that touch the edge of the image
+    mask_crops = [m for m in mask_crops if not (
+        np.any(m[0, :]) or np.any(m[-1, :]) or 
+        np.any(m[:, 0]) or np.any(m[:, -1])
+    )]
 
     min_depth = np.inf
     mask_crop = None
@@ -223,13 +231,7 @@ async def root(
 
 def main():
     warmup_models()
-    # uvicorn.run(app, host="0.0.0.0", port=8000)
-    rgb = np.load("rgb.npy")
-    depth = np.load("depth.npy")
-    with open("cam_params.json", "r") as f:
-        cam_params = json.load(f)
-    item_offset = bin_picking_inference(rgb, depth, "bottle", cam_params)
-    print(item_offset)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
     main()
