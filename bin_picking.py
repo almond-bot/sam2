@@ -143,7 +143,7 @@ def save_mask_overlays(rgb: np.ndarray, masks: list[np.ndarray]):
     for mask in masks:
         green_overlay[mask] = [0, 255, 0]
     overlay = cv2.addWeighted(overlay, 0.7, green_overlay, 0.3, 0)
-    cv2.imwrite("mask_overlays.jpg", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    cv2.imwrite("mask_overlays.png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
 def save_mask_overlay(rgb: np.ndarray, mask: np.ndarray):
     overlay = rgb.copy()
@@ -152,7 +152,7 @@ def save_mask_overlay(rgb: np.ndarray, mask: np.ndarray):
     overlay = cv2.addWeighted(overlay, 0.7, green_overlay, 0.3, 0)
     
     # Save the overlay image
-    cv2.imwrite("mask_overlay.jpg", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+    cv2.imwrite("mask_overlay.png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
 def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_params: dict):
     # Run inference
