@@ -305,7 +305,7 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
         if not sub.any():
             continue
 
-        sub[mask[y0:y1, x0:x1] == 0] = False
+        sub[mask_crop[y0:y1, x0:x1] == 0] = False
 
         full = np.zeros((H, W), dtype=bool)
         full[y0:y1, x0:x1] = sub
@@ -349,7 +349,7 @@ async def root(
     return item_offset
 
 def main():
-    warmup_models()
+    # warmup_models()
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
