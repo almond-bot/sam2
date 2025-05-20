@@ -65,7 +65,7 @@ def sam2_inference(
 
 def warmup_models():
     grounding_dino_inference(np.zeros((1080, 1920, 3), dtype=np.uint8), "warmup")
-    sam2_inference(np.zeros((1080, 1920, 3), dtype=np.uint8))
+    sam2_inference(np.zeros((250, 250, 3), dtype=np.uint8))
 
 
 def _wrap_to_90(angle_deg: float) -> float:
@@ -292,11 +292,11 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
     final_masks = []
 
     ys, xs = np.where(mask_crop)
-    y0, y1 = ys.min(), ys.max() + 1
-    x0, x1 = xs.min(), xs.max() + 1    
+    reg_y0, reg_y1 = ys.min(), ys.max() + 1
+    reg_x0, reg_x1 = xs.min(), xs.max() + 1    
 
-    rgb_reg   = rgb_crop[y0:y1, x0:x1]
-    depth_reg = depth_crop[y0:y1, x0:x1]
+    rgb_reg   = rgb_crop[reg_y0:reg_y1, reg_x0:reg_x1]
+    depth_reg = depth_crop[reg_y0:reg_y1, reg_x0:reg_x1]
 
     rgbd_reg = apply_depth_to_rgb(rgb_reg, depth_reg)
 
@@ -305,10 +305,10 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
         if not sub.any():
             continue
 
-        sub[mask_crop[y0:y1, x0:x1] == 0] = False
+        sub[mask_crop[reg_y0:reg_y1, reg_x0:reg_x1] == 0] = False
 
         full = np.zeros((H, W), dtype=bool)
-        full[y0:y1, x0:x1] = sub
+        full[reg_y0:reg_y1, reg_x0:reg_x1] = sub
         final_masks.append(full)
 
     mask_crop = mask_to_pick(depth_crop, final_masks)
@@ -349,7 +349,7 @@ async def root(
     return item_offset
 
 def main():
-    # warmup_models()
+    warmup_models()
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
