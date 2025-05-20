@@ -266,6 +266,9 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
         np.any(m[:, 0]) or np.any(m[:, -1])
     )]
 
+    # Remove masks that are too small
+    mask_crops = [m for m in mask_crops if np.sum(m) > 10000]
+
     # Remove masks that are fully enclosed in another mask and are less than 10% of parent mask area
     filtered_masks = []
     for i, mask1 in enumerate(mask_crops):
@@ -302,7 +305,7 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
 
     for o in sam2_inference(rgbd_reg):
         sub = o["segmentation"].astype(bool)
-        if np.sum(sub) < 100:
+        if np.sum(sub) < 10000:
             continue
 
         sub[mask_crop[reg_y0:reg_y1, reg_x0:reg_x1] == 0] = False
@@ -312,6 +315,9 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
         final_masks.append(full)
 
     mask_crop = mask_to_pick(depth_crop, final_masks)
+
+    if mask_crop is None:
+        return
 
     save_mask_overlays(rgb_crop, mask_crops)
     save_mask_overlay(rgb_crop, mask_crop)
