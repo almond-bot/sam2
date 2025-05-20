@@ -31,7 +31,7 @@ sam2_mask_generator = SAM2AutomaticMaskGenerator(
     sam2,
     points_per_side=96,
     points_per_batch=256,
-    stability_score_thresh=0.1,
+    stability_score_thresh=0.5,
     min_mask_region_area=800,
 )
 
@@ -302,7 +302,7 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
 
     for o in sam2_inference(rgbd_reg):
         sub = o["segmentation"].astype(bool)
-        if not sub.any():
+        if np.sum(sub) < 100:
             continue
 
         sub[mask_crop[reg_y0:reg_y1, reg_x0:reg_x1] == 0] = False
