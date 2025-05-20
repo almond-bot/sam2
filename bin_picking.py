@@ -237,12 +237,16 @@ def mask_to_pick(depth_crop: np.ndarray, mask_crops: list[np.ndarray]) -> np.nda
     return mask_crop
 
 def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_params: dict):
+    rgb_dino = rgb[:, 720:-550]
+
     # Run inference
-    bboxes = grounding_dino_inference(rgb, item)
+    bboxes = grounding_dino_inference(rgb_dino, item)
     if len(bboxes) == 0:
         return
 
     x1, y1, x2, y2 = bboxes[0]
+    # Scale coordinates back to original RGB image
+    x1, x2 = x1 + 720, x2 + 720  # Add offset from rgb_dino crop
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
     w, h = x2 - x1, y2 - y1
     x1, y1 = int(cx - w / 2), int(cy - h / 2)
