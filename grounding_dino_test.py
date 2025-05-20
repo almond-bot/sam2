@@ -3,9 +3,9 @@ import numpy as np
 
 from bin_picking import grounding_dino_inference
 
-rgb = cv2.cvtColor(cv2.imread("rgb.png"), cv2.COLOR_BGR2RGB)
+rgb = cv2.cvtColor(cv2.imread("rgb_crop.png"), cv2.COLOR_BGR2RGB)
 
-bboxes = grounding_dino_inference(rgb, "circular pieces of metal")
+bboxes = grounding_dino_inference(rgb, "an individual piece of sheet metal that looks the easiest to pick up with a robot")
 
 for bbox in bboxes:
     # Convert coordinates to integers

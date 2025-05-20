@@ -29,7 +29,10 @@ sam2 = build_sam2(
 )
 sam2_mask_generator = SAM2AutomaticMaskGenerator(
     sam2,
-    stability_score_thresh=0.8,
+    points_per_side=96,
+    points_per_batch=256,
+    stability_score_thresh=0.1,
+    min_mask_region_area=800,
 )
 
 def grounding_dino_inference(img: np.ndarray, item: str) -> np.ndarray:
@@ -91,9 +94,24 @@ def get_item_offset(
     center_x_loc = int(np.mean(x_coords))
     center_y_loc = int(np.mean(y_coords))
 
-    center_z = masked_depth[center_y_loc, center_x_loc]
-    center_x = ((center_x_loc - cam_params["cx"]) * center_z) / cam_params["fx"]
-    center_y = ((center_y_loc - cam_params["cy"]) * center_z) / cam_params["fy"]
+    # Get a 5x5 grid around the center point
+    grid_size = 2  # This gives us a 5x5 grid (2 pixels in each direction)
+    y_indices = np.arange(center_y_loc - grid_size, center_y_loc + grid_size + 1)
+    x_indices = np.arange(center_x_loc - grid_size, center_x_loc + grid_size + 1)
+    
+    # Get all depth values in the grid
+    grid_depths = masked_depth[y_indices[:, None], x_indices]
+    
+    # Calculate average depth, ignoring NaN values
+    center_z = np.nanmean(grid_depths)
+    
+    # Calculate x and y coordinates for each point in the grid
+    grid_x = ((x_indices - cam_params["cx"]) * center_z) / cam_params["fx"]
+    grid_y = ((y_indices - cam_params["cy"]) * center_z) / cam_params["fy"]
+    
+    # Calculate average x and y coordinates
+    center_x = np.nanmean(grid_x)
+    center_y = np.nanmean(grid_y)
 
     x_coords = ((x_coords - cam_params["cx"]) * z_coords) / cam_params["fx"]
     y_coords = ((y_coords - cam_params["cy"]) * z_coords) / cam_params["fy"]
@@ -116,35 +134,46 @@ def get_item_offset(
     if np.linalg.det(eigenvectors) < 0:
         eigenvectors[:, 2] *= -1
 
-    # Ensure Z-axis points up (positive Z in camera frame)
-    if eigenvectors[2, 2] < 0:
+    # Ensure Z-axis points down (negative Z in camera frame)
+    if eigenvectors[2, 2] > 0:
         eigenvectors *= -1
 
     # Rotation angles (radians)
-    roll = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
-    pitch = np.arctan2(
+    rx = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
+    ry = np.arctan2(
         -eigenvectors[0, 2], np.sqrt(eigenvectors[1, 2] ** 2 + eigenvectors[2, 2] ** 2)
     )
 
     # Convert to degrees and wrap to [-90, 90]
-    roll_deg = _wrap_to_90(np.degrees(roll))
-    pitch_deg = _wrap_to_90(np.degrees(pitch))
+    rx_deg = _wrap_to_90(np.degrees(rx))
+    ry_deg = _wrap_to_90(np.degrees(ry))
 
     return {
         "x": float(center_x),
         "y": float(center_y),
         "z": float(center_z),
-        "roll": float(roll_deg),
-        "pitch": float(pitch_deg),
-        "yaw": 0
+        "rx": float(rx_deg),
+        "ry": float(ry_deg),
+        "rz": 0
     }
 
 def save_mask_overlays(rgb: np.ndarray, masks: list[np.ndarray]):
     overlay = rgb.copy()
-    green_overlay = np.zeros_like(overlay)
-    for mask in masks:
-        green_overlay[mask] = [0, 255, 0]
-    overlay = cv2.addWeighted(overlay, 0.7, green_overlay, 0.3, 0)
+    color_overlay = np.zeros_like(overlay)
+    
+    # Generate different colors for each mask
+    colors = []
+    for i in range(len(masks)):
+        # Use HSV color space to generate evenly spaced colors
+        hue = (i * 180 / len(masks)) % 180
+        # Convert HSV to RGB (OpenCV uses BGR)
+        color = cv2.cvtColor(np.uint8([[[hue, 255, 255]]]), cv2.COLOR_HSV2BGR)[0][0]
+        colors.append(color)
+    
+    for mask, color in zip(masks, colors):
+        color_overlay[mask] = color
+    
+    overlay = cv2.addWeighted(overlay, 0.7, color_overlay, 0.3, 0)
     cv2.imwrite("mask_overlays.png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
 def save_mask_overlay(rgb: np.ndarray, mask: np.ndarray):
@@ -156,51 +185,17 @@ def save_mask_overlay(rgb: np.ndarray, mask: np.ndarray):
     # Save the overlay image
     cv2.imwrite("mask_overlay.png", cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
 
-def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_params: dict):
-    # Run inference
-    bboxes = grounding_dino_inference(rgb, item)
-    if len(bboxes) == 0:
-        return
+def apply_depth_to_rgb(rgb: np.ndarray, depth: np.ndarray) -> np.ndarray:
+    depth_norm = depth.copy()
+    depth_norm[depth_norm == 0] = np.nanmax(depth_norm)
+    depth_norm = np.nan_to_num(depth_norm, nan=np.nanmax(depth_norm))
+    depth_norm = cv2.normalize(depth_norm, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    x1, y1, x2, y2 = bboxes[0]
-    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-    w, h = x2 - x1, y2 - y1
-    x1, y1 = int(cx - w / 2), int(cy - h / 2)
-    x2, y2 = int(cx + w / 2), int(cy + h / 2)
+    depth_rgb = np.stack([depth_norm]*3, axis=-1)
+    rgb_with_depth = cv2.addWeighted(rgb, 0.5, depth_rgb, 0.5, 0)
+    return rgb_with_depth
 
-    rgb_crop = rgb[y1:y2, x1:x2]
-    depth_crop = depth[y1:y2, x1:x2]
-
-    valid_depth_mask = ~np.isnan(depth_crop)
-    if not np.any(valid_depth_mask):
-        return
-
-    mask_crops = sam2_inference(rgb_crop)
-    mask_crops = [m["segmentation"] for m in mask_crops]
-
-    # Remove masks that touch the edge of the image
-    mask_crops = [m for m in mask_crops if not (
-        np.any(m[0, :]) or np.any(m[-1, :]) or 
-        np.any(m[:, 0]) or np.any(m[:, -1])
-    )]
-
-    # Remove masks that are fully enclosed in another mask and are less than 10% of parent mask area
-    filtered_masks = []
-    for i, mask1 in enumerate(mask_crops):
-        is_enclosed = False
-        for j, mask2 in enumerate(mask_crops):
-            if i != j and np.all(np.logical_or(~mask1, mask2)):
-                # Calculate areas
-                area1 = np.sum(mask1)
-                area2 = np.sum(mask2)
-                # Only remove if enclosed mask is less than 10% of parent mask
-                if area1 < 0.1 * area2:
-                    is_enclosed = True
-                    break
-        if not is_enclosed:
-            filtered_masks.append(mask1)
-    mask_crops = filtered_masks
-
+def mask_to_pick(depth_crop: np.ndarray, mask_crops: list[np.ndarray]) -> np.ndarray:
     best_score = -np.inf
     mask_crop = None
 
@@ -239,9 +234,85 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
             best_score = score
             mask_crop = m
 
+    return mask_crop
+
+def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_params: dict):
+    # Run inference
+    bboxes = grounding_dino_inference(rgb, item)
+    if len(bboxes) == 0:
+        return
+
+    x1, y1, x2, y2 = bboxes[0]
+    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+    w, h = x2 - x1, y2 - y1
+    x1, y1 = int(cx - w / 2), int(cy - h / 2)
+    x2, y2 = int(cx + w / 2), int(cy + h / 2)
+
+    rgb_crop = rgb[y1:y2, x1:x2]
+    depth_crop = depth[y1:y2, x1:x2]
+
+    valid_depth_mask = ~np.isnan(depth_crop)
+    if not np.any(valid_depth_mask):
+        return
+
+    rgb_with_depth = apply_depth_to_rgb(rgb_crop, depth_crop)
+
+    mask_crops = sam2_inference(rgb_with_depth)
+    mask_crops = [m["segmentation"] for m in mask_crops]
+
+    # Remove masks that touch the edge of the image
+    mask_crops = [m for m in mask_crops if not (
+        np.any(m[0, :]) or np.any(m[-1, :]) or 
+        np.any(m[:, 0]) or np.any(m[:, -1])
+    )]
+
+    # Remove masks that are fully enclosed in another mask and are less than 10% of parent mask area
+    filtered_masks = []
+    for i, mask1 in enumerate(mask_crops):
+        is_enclosed = False
+        for j, mask2 in enumerate(mask_crops):
+            if i != j and np.all(np.logical_or(~mask1, mask2)):
+                # Calculate areas
+                area1 = np.sum(mask1)
+                area2 = np.sum(mask2)
+                # Only remove if enclosed mask is less than 10% of parent mask
+                if area1 < 0.1 * area2:
+                    is_enclosed = True
+                    break
+        if not is_enclosed:
+            filtered_masks.append(mask1)
+    mask_crops = filtered_masks
+
+    mask_crop = mask_to_pick(depth_crop, mask_crops)
+
     if mask_crop is None:
         return
-    
+
+    H, W = rgb_crop.shape[:2]
+    final_masks = []
+
+    ys, xs = np.where(mask_crop)
+    y0, y1 = ys.min(), ys.max() + 1
+    x0, x1 = xs.min(), xs.max() + 1    
+
+    rgb_reg   = rgb_crop[y0:y1, x0:x1]
+    depth_reg = depth_crop[y0:y1, x0:x1]
+
+    rgbd_reg = apply_depth_to_rgb(rgb_reg, depth_reg)
+
+    for o in sam2_inference(rgbd_reg):
+        sub = o["segmentation"].astype(bool)
+        if not sub.any():
+            continue
+
+        sub[mask[y0:y1, x0:x1] == 0] = False
+
+        full = np.zeros((H, W), dtype=bool)
+        full[y0:y1, x0:x1] = sub
+        final_masks.append(full)
+
+    mask_crop = mask_to_pick(depth_crop, final_masks)
+
     save_mask_overlays(rgb_crop, mask_crops)
     save_mask_overlay(rgb_crop, mask_crop)
 
