@@ -139,22 +139,22 @@ def get_item_offset(
         eigenvectors *= -1
 
     # Rotation angles (radians)
-    rx = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
-    ry = np.arctan2(
+    roll = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
+    pitch = np.arctan2(
         -eigenvectors[0, 2], np.sqrt(eigenvectors[1, 2] ** 2 + eigenvectors[2, 2] ** 2)
     )
 
     # Convert to degrees and wrap to [-90, 90]
-    rx_deg = _wrap_to_90(np.degrees(rx))
-    ry_deg = _wrap_to_90(np.degrees(ry))
+    roll_deg = _wrap_to_90(np.degrees(roll))
+    pitch_deg = _wrap_to_90(np.degrees(pitch))
 
     return {
         "x": float(center_x),
         "y": float(center_y),
         "z": float(center_z),
-        "rx": float(rx_deg),
-        "ry": float(ry_deg),
-        "rz": 0
+        "roll": float(roll_deg),
+        "pitch": float(pitch_deg),
+        "yaw": 0
     }
 
 def save_mask_overlays(rgb: np.ndarray, masks: list[np.ndarray]):
