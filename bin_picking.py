@@ -178,7 +178,7 @@ def mask_to_pick(depth_crop: np.ndarray, mask_crops: list[np.ndarray]) -> np.nda
     return mask_crop
 
 def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
-    rgb_dino = rgb[:, 720:-550]
+    rgb_dino = rgb[:, 600:-600]
 
     # Run inference
     bboxes = grounding_dino_inference(rgb_dino, item)
@@ -187,7 +187,7 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
 
     x1, y1, x2, y2 = bboxes[0]
     # Scale coordinates back to original RGB image
-    x1, x2 = x1 + 720, x2 + 720  # Add offset from rgb_dino crop
+    x1, x2 = x1 + 600, x2 + 600  # Add offset from rgb_dino crop
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
     w, h = x2 - x1, y2 - y1
     x1, y1 = int(cx - w / 2), int(cy - h / 2)
@@ -236,33 +236,33 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
     if mask_crop is None:
         return
 
-    H, W = rgb_crop.shape[:2]
-    final_masks = []
+    # H, W = rgb_crop.shape[:2]
+    # final_masks = []
 
-    ys, xs = np.where(mask_crop)
-    reg_y0, reg_y1 = ys.min(), ys.max() + 1
-    reg_x0, reg_x1 = xs.min(), xs.max() + 1    
+    # ys, xs = np.where(mask_crop)
+    # reg_y0, reg_y1 = ys.min(), ys.max() + 1
+    # reg_x0, reg_x1 = xs.min(), xs.max() + 1    
 
-    rgb_reg   = rgb_crop[reg_y0:reg_y1, reg_x0:reg_x1]
-    depth_reg = depth_crop[reg_y0:reg_y1, reg_x0:reg_x1]
+    # rgb_reg   = rgb_crop[reg_y0:reg_y1, reg_x0:reg_x1]
+    # depth_reg = depth_crop[reg_y0:reg_y1, reg_x0:reg_x1]
 
-    rgbd_reg = apply_depth_to_rgb(rgb_reg, depth_reg)
+    # rgbd_reg = apply_depth_to_rgb(rgb_reg, depth_reg)
 
-    for o in sam2_inference(rgbd_reg):
-        sub = o["segmentation"].astype(bool)
-        if np.sum(sub) < 10000:
-            continue
+    # for o in sam2_inference(rgbd_reg):
+    #     sub = o["segmentation"].astype(bool)
+    #     if np.sum(sub) < 10000:
+    #         continue
 
-        sub[mask_crop[reg_y0:reg_y1, reg_x0:reg_x1] == 0] = False
+    #     sub[mask_crop[reg_y0:reg_y1, reg_x0:reg_x1] == 0] = False
 
-        full = np.zeros((H, W), dtype=bool)
-        full[reg_y0:reg_y1, reg_x0:reg_x1] = sub
-        final_masks.append(full)
+    #     full = np.zeros((H, W), dtype=bool)
+    #     full[reg_y0:reg_y1, reg_x0:reg_x1] = sub
+    #     final_masks.append(full)
 
-    mask_crop = mask_to_pick(depth_crop, final_masks)
+    # mask_crop = mask_to_pick(depth_crop, final_masks)
 
-    if mask_crop is None:
-        return
+    # if mask_crop is None:
+    #     return
 
     save_mask_overlays(rgb_crop, mask_crops)
     save_mask_overlay(rgb_crop, mask_crop)
