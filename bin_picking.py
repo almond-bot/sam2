@@ -1,6 +1,5 @@
 import asyncio
 from fastapi import FastAPI, File, Form, UploadFile
-import json
 import uvicorn
 import torch
 import numpy as np
@@ -79,7 +78,7 @@ def _wrap_to_90(angle_deg: float) -> float:
 
 
 def get_item_offset(
-    cam_params: dict, depth: np.ndarray, mask: np.ndarray
+    depth: np.ndarray, mask: np.ndarray
 ) -> dict:
     # Apply mask to depth to get only the depth values of the object
     masked_depth = depth.copy()
@@ -88,74 +87,16 @@ def get_item_offset(
     # Get 3D points for the segmented object
     valid_points = np.where(~np.isnan(masked_depth))
     y_coords, x_coords = valid_points
-    z_coords = masked_depth[valid_points]
 
     # Calculate center point of the mask
     center_x_loc = int(np.mean(x_coords))
     center_y_loc = int(np.mean(y_coords))
 
-    # Get a 5x5 grid around the center point
-    grid_size = 2  # This gives us a 5x5 grid (2 pixels in each direction)
-    y_indices = np.arange(center_y_loc - grid_size, center_y_loc + grid_size + 1)
-    x_indices = np.arange(center_x_loc - grid_size, center_x_loc + grid_size + 1)
-    
-    # Get all depth values in the grid
-    grid_depths = masked_depth[y_indices[:, None], x_indices]
-    
-    # Calculate average depth, ignoring NaN values
-    center_z = np.nanmean(grid_depths)
-    
-    # Calculate x and y coordinates for each point in the grid
-    grid_x = ((x_indices - cam_params["cx"]) * center_z) / cam_params["fx"]
-    grid_y = ((y_indices - cam_params["cy"]) * center_z) / cam_params["fy"]
-    
-    # Calculate average x and y coordinates
-    center_x = np.nanmean(grid_x)
-    center_y = np.nanmean(grid_y)
-
-    x_coords = ((x_coords - cam_params["cx"]) * z_coords) / cam_params["fx"]
-    y_coords = ((y_coords - cam_params["cy"]) * z_coords) / cam_params["fy"]
-
-    # Stack coordinates into a point cloud for PCA
-    points = np.column_stack((x_coords, y_coords, z_coords))
-
-    # Center the points for PCA
-    centered_points = points - np.mean(points, axis=0)
-
-    # Perform PCA to get principal axes
-    covariance_matrix = np.cov(centered_points.T)
-    eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
-
-    # Order eigenvectors by descending eigenvalues
-    idx = eigenvalues.argsort()[::-1]
-    eigenvectors = eigenvectors[:, idx]
-
-    # Enforce right-handed coordinate system
-    if np.linalg.det(eigenvectors) < 0:
-        eigenvectors[:, 2] *= -1
-
-    # Ensure Z-axis points down (negative Z in camera frame)
-    if eigenvectors[2, 2] > 0:
-        eigenvectors *= -1
-
-    # Rotation angles (radians)
-    roll = np.arctan2(eigenvectors[1, 2], eigenvectors[2, 2])
-    pitch = np.arctan2(
-        -eigenvectors[0, 2], np.sqrt(eigenvectors[1, 2] ** 2 + eigenvectors[2, 2] ** 2)
-    )
-
-    # Convert to degrees and wrap to [-90, 90]
-    roll_deg = _wrap_to_90(np.degrees(roll))
-    pitch_deg = _wrap_to_90(np.degrees(pitch))
-
     return {
-        "x": float(center_x),
-        "y": float(center_y),
-        "z": float(center_z),
-        "roll": float(roll_deg),
-        "pitch": float(pitch_deg),
-        "yaw": 0
+        "x": center_x_loc,
+        "y": center_y_loc,
     }
+
 
 def save_mask_overlays(rgb: np.ndarray, masks: list[np.ndarray]):
     overlay = rgb.copy()
@@ -236,7 +177,7 @@ def mask_to_pick(depth_crop: np.ndarray, mask_crops: list[np.ndarray]) -> np.nda
 
     return mask_crop
 
-def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_params: dict):
+def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
     rgb_dino = rgb[:, 720:-550]
 
     # Run inference
@@ -329,9 +270,9 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str, cam_par
     mask = np.zeros(depth.shape, dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
 
-    item_offset = get_item_offset(cam_params, depth, mask)
+    item_offset = get_item_offset(depth, mask)
     return item_offset
-    
+
 
 @app.post("/")
 async def root(
@@ -340,7 +281,6 @@ async def root(
     rgb_shape: str = Form(...),
     depth_shape: str = Form(...),
     item: str = Form(...),
-    cam_params: str = Form(...),
 ):
     h, w = map(int, rgb_shape.split(","))
     dh, dw = map(int, depth_shape.split(","))
@@ -352,9 +292,7 @@ async def root(
     depth_u16 = np.frombuffer(lz4.frame.decompress(d_lz4), np.uint16).reshape((dh, dw))
     depth = depth_u16.astype(np.float32) / 100.0
 
-    cam_params = json.loads(cam_params)
-
-    item_offset = bin_picking_inference(rgb, depth, item, cam_params)
+    item_offset = bin_picking_inference(rgb, depth, item)
 
     return item_offset
 
