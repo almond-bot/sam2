@@ -28,10 +28,10 @@ sam2 = build_sam2(
 )
 sam2_mask_generator = SAM2AutomaticMaskGenerator(
     sam2,
-    points_per_side=96,
-    points_per_batch=256,
-    stability_score_thresh=0.5,
-    min_mask_region_area=800,
+    # points_per_side=96,
+    # points_per_batch=256,
+    stability_score_thresh=0.1,
+    # min_mask_region_area=800,
 )
 
 def grounding_dino_inference(img: np.ndarray, item: str) -> np.ndarray:
@@ -67,16 +67,6 @@ def warmup_models():
     sam2_inference(np.zeros((250, 250, 3), dtype=np.uint8))
 
 
-def _wrap_to_90(angle_deg: float) -> float:
-    """Wrap angle to the range [-90, 90] degrees."""
-    angle_deg = ((angle_deg + 180) % 360) - 180  # -> [-180, 180]
-    if angle_deg > 90:
-        angle_deg -= 180
-    elif angle_deg < -90:
-        angle_deg += 180
-    return angle_deg
-
-
 def get_item_offset(
     depth: np.ndarray, mask: np.ndarray
 ) -> dict:
@@ -89,8 +79,8 @@ def get_item_offset(
     y_coords, x_coords = valid_points
 
     # Calculate center point of the mask
-    center_x_loc = int(np.mean(x_coords))
-    center_y_loc = int(np.mean(y_coords))
+    center_x_loc = int((np.min(x_coords) + np.max(x_coords)) / 2)
+    center_y_loc = int((np.min(y_coords) + np.max(y_coords)) / 2)
 
     return {
         "x": center_x_loc,
@@ -177,7 +167,7 @@ def mask_to_pick(depth_crop: np.ndarray, mask_crops: list[np.ndarray]) -> np.nda
 
     return mask_crop
 
-def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
+def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str) -> dict:
     rgb_dino = rgb[:, 600:-600]
 
     # Run inference
@@ -198,9 +188,13 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
 
     valid_depth_mask = ~np.isnan(depth_crop)
     if not np.any(valid_depth_mask):
-        return
+        return {
+            "error": "Grounding DINO: No valid depth found"
+        }
 
     rgb_with_depth = apply_depth_to_rgb(rgb_crop, depth_crop)
+
+    cv2.imwrite("rgb_with_depth.png", cv2.cvtColor(rgb_with_depth, cv2.COLOR_RGB2BGR))
 
     mask_crops = sam2_inference(rgb_with_depth)
     mask_crops = [m["segmentation"] for m in mask_crops]
@@ -233,8 +227,14 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
 
     mask_crop = mask_to_pick(depth_crop, mask_crops)
 
+    save_mask_overlays(rgb_crop, mask_crops)
+
     if mask_crop is None:
-        return
+        return {
+            "error": "SAM2: No valid mask found"
+        }
+    
+    save_mask_overlay(rgb_crop, mask_crop)
 
     # H, W = rgb_crop.shape[:2]
     # final_masks = []
@@ -263,9 +263,6 @@ def bin_picking_inference(rgb: np.ndarray, depth: np.ndarray, item: str):
 
     # if mask_crop is None:
     #     return
-
-    save_mask_overlays(rgb_crop, mask_crops)
-    save_mask_overlay(rgb_crop, mask_crop)
 
     mask = np.zeros(depth.shape, dtype=bool)
     mask[y1:y2, x1:x2] = mask_crop
